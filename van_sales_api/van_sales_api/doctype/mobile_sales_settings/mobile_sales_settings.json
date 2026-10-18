@@ -1,0 +1,108 @@
+{
+  "doctype": "DocType",
+  "name": "Mobile Sales Settings",
+  "module": "Van Sales Api",
+  "autoname": "field:user",
+  "engine": "InnoDB",
+  "field_order": [
+    "user",
+    "company",
+    "warehouse",
+    "target_warehouse",
+    "price_list",
+    "tax_template",
+    "mode_of_payment",
+    "update_stock",
+    "latitude_field",
+    "longitude_field",
+    "settings_pin"
+  ],
+  "fields": [
+    {
+      "fieldname": "user",
+      "fieldtype": "Link",
+      "label": "المستخدم",
+      "reqd": 1,
+      "options": "User",
+      "unique": 1
+    },
+    {
+      "fieldname": "company",
+      "fieldtype": "Link",
+      "label": "الشركة",
+      "reqd": 1,
+      "options": "Company"
+    },
+    {
+      "fieldname": "warehouse",
+      "fieldtype": "Link",
+      "label": "مستودع المندوب",
+      "reqd": 1,
+      "options": "Warehouse"
+    },
+    {
+      "fieldname": "target_warehouse",
+      "fieldtype": "Link",
+      "label": "المستودع المستلم الافتراضي",
+      "reqd": 0,
+      "options": "Warehouse"
+    },
+    {
+      "fieldname": "price_list",
+      "fieldtype": "Link",
+      "label": "قائمة الأسعار",
+      "reqd": 1,
+      "options": "Price List"
+    },
+    {
+      "fieldname": "tax_template",
+      "fieldtype": "Link",
+      "label": "قالب الضرائب",
+      "reqd": 0,
+      "options": "Sales Taxes and Charges Template"
+    },
+    {
+      "fieldname": "mode_of_payment",
+      "fieldtype": "Link",
+      "label": "طريقة التحصيل الافتراضية",
+      "reqd": 0,
+      "options": "Mode of Payment"
+    },
+    {
+      "fieldname": "update_stock",
+      "fieldtype": "Check",
+      "label": "تحديث المخزون افتراضيًا",
+      "reqd": 0,
+      "default": "1"
+    },
+    {
+      "fieldname": "latitude_field",
+      "fieldtype": "Data",
+      "label": "حقل خط العرض على العميل أو العنوان",
+      "reqd": 0
+    },
+    {
+      "fieldname": "longitude_field",
+      "fieldtype": "Data",
+      "label": "حقل خط الطول على العميل أو العنوان",
+      "reqd": 0
+    },
+    {
+      "fieldname": "settings_pin",
+      "fieldtype": "Password",
+      "label": "رقم الإعدادات السري من 6 إلى 12 رقمًا",
+      "reqd": 1
+    }
+  ],
+  "permissions": [
+    {
+      "role": "System Manager",
+      "read": 1,
+      "write": 1,
+      "create": 1,
+      "delete": 1
+    }
+  ],
+  "sort_field": "modified",
+  "sort_order": "DESC"
+}
