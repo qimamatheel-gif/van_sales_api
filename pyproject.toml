@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "van_sales_api"
+version = "0.2.0"
+description = "Permission-aware Android sales endpoints for ERPNext 16"
+authors = [{name = "Van Sales contributors"}]
+requires-python = ">=3.11"
+license = {text = "MIT"}
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["van_sales_api*"]
+
+[tool.setuptools.package-data]
+"*" = ["*.json", "*.txt"]
+
+# Compatibility metadata required by Frappe Cloud / Bench.
+[tool.bench.frappe-dependencies]
+frappe = ">=16.0.0,<17.0.0"
