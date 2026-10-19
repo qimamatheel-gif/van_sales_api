@@ -7,6 +7,7 @@
   "field_order": [
     "user",
     "company",
+    "customer_group",
     "warehouse",
     "target_warehouse",
     "price_list",
@@ -92,6 +93,13 @@
       "fieldtype": "Password",
       "label": "رقم الإعدادات السري من 6 إلى 12 رقمًا",
       "reqd": 1
+    },
+    {
+      "fieldname": "customer_group",
+      "fieldtype": "Link",
+      "options": "Customer Group",
+      "label": "مجموعة عملاء المندوب",
+      "description": "تشمل المجموعة وفروعها. إلزامية للمندوب العادي؛ يطبق القيد على السيرفر."
     }
   ],
   "permissions": [
