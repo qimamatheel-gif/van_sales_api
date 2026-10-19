@@ -8,7 +8,7 @@ import frappe
 from frappe import _
 from frappe.utils import cint
 
-FIELDS = ('company', 'warehouse', 'target_warehouse', 'price_list', 'tax_template',
+FIELDS = ('customer_group', 'company', 'warehouse', 'target_warehouse', 'price_list', 'tax_template',
           'mode_of_payment', 'update_stock', 'latitude_field', 'longitude_field')
 
 
@@ -28,6 +28,8 @@ def validate_document(doc):
             wh = frappe.get_doc('Warehouse', doc.get(field)); wh.check_permission('read')
             if wh.company != doc.company or wh.is_group or wh.disabled:
                 frappe.throw(_('مستودع غير صالح للشركة'))
+    if doc.get('customer_group'):
+        frappe.get_doc('Customer Group',doc.customer_group).check_permission('read')
     price = frappe.get_doc('Price List', doc.price_list); price.check_permission('read')
     if not price.enabled or not price.selling or price.currency != company.default_currency:
         frappe.throw(_('اختر قائمة أسعار بيع فعالة بعملة الشركة'))

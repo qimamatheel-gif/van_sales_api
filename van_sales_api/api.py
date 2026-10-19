@@ -22,6 +22,10 @@ def auth():
 def read_doc(doctype, name):
     doc = frappe.get_doc(doctype, name)
     doc.check_permission("read")
+    from van_sales_api.customer_scope import check_customer
+    if doctype == 'Customer':check_customer(doc)
+    elif doctype == 'Sales Invoice':read_doc('Customer',doc.customer)
+    elif doctype == 'Payment Entry' and doc.party_type == 'Customer':read_doc('Customer',doc.party)
     return doc
 
 
@@ -34,16 +38,31 @@ def parse(value):
 
 
 def visible(doctype, fields, filters=None, start=0, length=200):
-    return frappe.get_list(doctype, fields=fields, filters=filters or {},
+    filters=dict(filters or {})
+    if doctype in ('Sales Invoice','Payment Entry'):
+        from van_sales_api.customer_scope import customer_names
+        names=customer_names()
+        if names is not None:
+            field='customer' if doctype=='Sales Invoice' else 'party'
+            requested=filters.get(field)
+            if isinstance(requested,str) and requested not in names:frappe.throw(_('العميل خارج مجموعتك'),frappe.PermissionError)
+            if not requested:filters[field]=['in',names or ['__NO_CUSTOMERS__']]
+    return frappe.get_list(doctype, fields=fields, filters=filters,
         order_by="name asc", limit_start=int(start), limit_page_length=int(length))
 
 
 @frappe.whitelist()
 def bootstrap():
     auth()
+    if not frappe.db.has_column('Mobile Request','abandoned') or not frappe.db.has_column('Mobile Sales Settings','customer_group'):
+        frappe.throw(_('ملفات التحديث وصلت، لكن قاعدة البيانات لم تُحدّث. أكمل نشر الموقع وتنفيذ Migrate في Frappe Cloud أولًا'))
     companies = visible("Company", ["name", "default_currency"], length=1000)
-    # No hidden truncation: catalogs expose a page endpoint.
-    return {"user": frappe.session.user, "companies": companies, "api_version": 2, "csrf_token": get_csrf_token(), "posting_date": nowdate(), "settings": public_settings(), "configured": bool(get_settings()), "can_initialize": "System Manager" in frappe.get_roles()}
+    config = get_settings()
+    manager = 'System Manager' in frappe.get_roles()
+    from van_sales_api.customer_scope import customer_names
+    allowed = customer_names() if (config and config.get('customer_group')) or manager else []
+    # Scope IDs also prune previously cached customers when membership changes.
+    return {"user": frappe.session.user, "companies": companies, "customer_scope": allowed, "api_version": 3, "csrf_token": get_csrf_token(), "posting_date": nowdate(), "settings": public_settings(), "configured": bool(get_settings()), "can_initialize": "System Manager" in frappe.get_roles()}
 
 
 @frappe.whitelist()
@@ -56,6 +75,7 @@ def catalog(kind, company=None, start=0, price_list=None):
     if int(start) < 0:
         frappe.throw(_("رقم صفحة غير صالح"))
     definitions = {
+        "customer_groups": ("Customer Group", ["name"], {}),
         "customers": ("Customer", ["name", "customer_name", "tax_id"], {"disabled": 0}),
         "items": ("Item", ["name", "item_name", "stock_uom"], {"disabled": 0, "is_sales_item": 1}),
         "warehouses": ("Warehouse", ["name"], {"company": company, "is_group": 0, "disabled": 0}),
@@ -67,14 +87,24 @@ def catalog(kind, company=None, start=0, price_list=None):
     if kind not in definitions:
         frappe.throw(_("نوع بيانات غير صالح"))
     dt, fields, filters = definitions[kind]
+    if kind == 'customers':
+        from van_sales_api.customer_scope import customer_filters
+        filters.update(customer_filters())
     rows = visible(dt, fields, filters, start)
+    has_more = len(rows) == 200
+    if kind == "prices":
+        from van_sales_api.customer_scope import customer_names
+        allowed = customer_names()
+        if allowed is not None:
+            rows = [r for r in rows if not r.customer or r.customer in allowed]
     if kind == "items":
         for row in rows:
             item = read_doc("Item", row.name)
+            row["barcodes"] = [{"barcode": b.barcode, "uom": b.uom} for b in item.barcodes]
             row["units"] = [{"uom": u.uom, "conversion_factor": u.conversion_factor} for u in item.uoms]
             if not any(u["uom"] == item.stock_uom for u in row["units"]):
                 row["units"].append({"uom": item.stock_uom, "conversion_factor": 1})
-    return {"rows": rows, "next_start": int(start) + 200 if len(rows) == 200 else None}
+    return {"rows": rows, "next_start": int(start) + 200 if has_more else None}
 
 
 @frappe.whitelist()
@@ -283,6 +313,7 @@ def summary(doc):
         "currency": doc.get("currency") or doc.get("paid_to_account_currency"),
         "net_total": doc.get("net_total"), "tax_total": doc.get("total_taxes_and_charges"),
         "grand_total": doc.get("grand_total"), "amount": doc.get("paid_amount"),
+        "modified": str(doc.get("modified") or ""), "company": doc.get("company"), "is_return": bool(doc.get("is_return")),
         "posting_date": doc.get("posting_date"), "customer": doc.get("customer") or doc.get("party"),
         "customer_name": doc.get("customer_name") or doc.get("party_name"), "tax_id": doc.get("tax_id"),
         "references": [{"reference_name": r.reference_name, "allocated_amount": r.allocated_amount} for r in (doc.get("references") or [])],
@@ -309,10 +340,12 @@ def save_document(request_id, payload):
     with frappe.cache.lock(lock_name, timeout=600, blocking_timeout=5):
         try:
             previous = frappe.db.get_value("Mobile Request", key,
-                ["payload_hash", "document_type", "document_name"], as_dict=True)
+                ["payload_hash", "document_type", "document_name", "abandoned"], as_dict=True)
             if previous:
                 if previous.payload_hash != fingerprint:
                     frappe.throw(_("لا يمكن تغيير بيانات طلب تم إرساله سابقًا"))
+                if previous.abandoned:
+                    frappe.throw(_("أُلغي هذا الطلب للتعديل. استخدم الطلب الجديد"))
                 return summary(read_doc(previous.document_type, previous.document_name))
             doc = builders[p["kind"]](p)
             doc.insert()  # normal permissions and validations; draft only
@@ -332,7 +365,7 @@ def save_document(request_id, payload):
 
 
 @frappe.whitelist(methods=["POST"])
-def submit_document(doctype, name):
+def submit_document(doctype, name, modified=None):
     auth()
     if doctype not in ("Sales Invoice", "Payment Entry", "Stock Entry"):
         frappe.throw(_("نوع مستند غير مسموح"))
@@ -342,6 +375,8 @@ def submit_document(doctype, name):
             doc = read_doc(doctype, name)
             doc.check_permission("submit")
             if doc.docstatus == 0:
+                if modified is not None and str(doc.modified) != str(modified):
+                    frappe.throw(_("تغير المستند بعد المراجعة. أعد فتحه وراجع أحدث نسخة قبل الاعتماد"))
                 doc.submit()
                 frappe.db.commit()
             elif doc.docstatus != 1:
@@ -411,11 +446,13 @@ def request_status(request_id, payload):
     key, fingerprint = request_identity(frappe.session.user, request_id, p)
     with frappe.cache.lock("van-sales:" + key, timeout=600, blocking_timeout=5):
         previous = frappe.db.get_value("Mobile Request", key,
-            ["payload_hash", "document_type", "document_name"], as_dict=True)
+            ["payload_hash", "document_type", "document_name", "abandoned"], as_dict=True)
         if not previous:
             return {"saved": False}
         if previous.payload_hash != fingerprint:
             frappe.throw(_("بيانات الطلب مختلفة"))
+        if previous.abandoned:
+            return {"saved": False, "retired": True}
         return {"saved": True, "document": summary(read_doc(previous.document_type, previous.document_name))}
 
 
@@ -527,6 +564,8 @@ def stock(company, warehouse=None, start=0):
     if wh.company != company or wh.is_group:
         frappe.throw(_("المستودع غير صالح"))
     rows = visible("Bin", ["name", "item_code", "actual_qty", "reserved_qty", "projected_qty", "stock_uom"], {"warehouse": warehouse}, start)
+    for row in rows:
+        row["available_qty"] = flt(row.actual_qty) - flt(row.reserved_qty)
     return {"rows": rows, "warehouse": warehouse, "next_start": int(start) + 200 if len(rows) == 200 else None}
 
 
@@ -551,7 +590,7 @@ def item_prices(customer, items):
 @frappe.whitelist()
 def document_pdf(doctype, name):
     auth()
-    if doctype not in ("Sales Invoice", "Payment Entry"):
+    if doctype not in ("Sales Invoice", "Payment Entry", "Stock Entry"):
         frappe.throw(_("تصدير هذا المستند غير متاح"))
     doc = read_doc(doctype, name)
     doc.check_permission("print")
@@ -560,3 +599,5 @@ def document_pdf(doctype, name):
     frappe.local.response.filename = name.replace("/", "-") + ".pdf"
     frappe.local.response.filecontent = data
     frappe.local.response.type = "pdf"
+
+from van_sales_api.mobile_documents import (get_document, drafts, prepare_pending_edit, update_document, print_data, statement_print_data, statement_pdf)
