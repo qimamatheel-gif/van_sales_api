@@ -1,4 +1,4 @@
-# Van Sales API 0.3.0 / API 3 — ERPNext/Frappe v16
+# Van Sales API 0.4.0 / API 4 — ERPNext/Frappe v16
 
 Deploy the complete contents of this directory as the root of the van_sales_api Git repository. Deploy the chosen branch to the site's Bench and update/migrate the site. Do not upload only api.py or the ZIP as application code. New installations additionally require install-app. Bootstrap checks the new schema and reports incomplete migration.
 
@@ -34,4 +34,14 @@ All business documents retain ordinary ERPNext permissions and validation. Priva
 PYTHONPATH=. python -m unittest discover -s tests -v
 ```
 
-Local tests mock the Frappe boundary. They do not establish live-site accounting, Redis concurrency, hardware printing or installation correctness. The user reported testing version0.2.0 on real hardware/site; version0.3.0 additions require the included acceptance tests. Source is MIT licensed.
+Local tests mock the Frappe boundary. They do not establish live-site accounting, Redis concurrency, hardware printing or installation correctness. The user reported testing version0.3.0 on real hardware/site; version0.4.0 additions require the included acceptance tests. Source is MIT licensed.
+
+## API4 reports and UOMs
+
+- document_history(kind=invoice|receipt) returns 50 submitted documents per page, newest first. It respects normal ORM permissions and salesperson customer-group scope; receipt history only includes Receive/Customer. Reprints do not create or submit documents.
+- item_prices returns units[] with an independent ERPNext quote for one unit of each Item UOM. before_tax=net_total and after_tax=grand_total, preserving inclusive/exclusive taxes and pricing rules. App pages use five items and debounce search.
+- stock rows now include item name, barcodes and unit conversions for actual/reserved/available. stock_pdf and stock_print_data apply warehouse, query/barcode and hide_zero filters. Bin report permission is required in addition to ordinary read permissions. Report limit10000 matching items /20000 scanned bins; mobile thermal limit500 items.
+- Returns accept qty plus optional uom per invoice row. Server derives factors and normalizes to the original invoice UOM, preserving original rates and tax calculation. Original historical factor takes precedence for its own UOM. make_sales_return and ERPNext save/submit enforce previous returns. No client rate/factor is trusted.
+- bootstrap adds full_name/email and api_version4. No new DocType fields in this update; deploy/migrate the complete app, retaining existing Mobile Request ledgers.
+- Removing a pending operation is an offline, encrypted local tombstone, reversible in the app. It never calls ERPNext delete or retires a server request; restore the same UUID to resolve uncertain outcomes before replacing an operation.
+- ML Kit release keep rules explicitly preserve registrars, barcode classes and native bridges for AGP9/R8. Initialization is inside an error boundary, not a Kotlin field initializer. Verify physical camera behavior after installing this update.
