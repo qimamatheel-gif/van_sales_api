@@ -1,31 +1,37 @@
-# Van Sales API 0.2.0 — ERPNext / Frappe v16
+# Van Sales API 0.3.0 / API 3 — ERPNext/Frappe v16
 
-Companion backend for the Arabic Android app, API version 2. Frappe Cloud must permit custom applications. This source has not been deployed to the user's repository or verified against their live site.
+Deploy the complete contents of this directory as the root of the van_sales_api Git repository. Deploy the chosen branch to the site's Bench and update/migrate the site. Do not upload only api.py or the ZIP as application code. New installations additionally require install-app. Bootstrap checks the new schema and reports incomplete migration.
 
-## Repository structure and upgrade
+## Salesperson customer scope
 
-Upload the complete contents of this directory to the root of the `van_sales_api` Git repository: `pyproject.toml`, `van_sales_api/`, `tests/`, README and LICENSE. Do not upload only api.py or the ZIP as application source. `hooks.py`, `modules.txt`, `patches.txt` and `__init__.py` must remain inside the Python package.
+System Manager configures each user's Mobile Sales Settings: company, customer_group, warehouse, selling price list, PIN and optional defaults. A salesperson without an assigned group is denied customer operations. The group includes permitted descendants. A System Manager without assignment can initialize setup; assigned administrators are scoped too. Normal ERPNext permissions and User Permissions remain active.
 
-Deploy the updated app on the site's Bench, then update/migrate the site. An already installed application must be updated rather than installed a second time. New installations require installing van_sales_api on the site after adding it to the Bench. Confirm Mobile Request and Mobile Sales Settings exist.
+Scope is enforced on customer catalogs, customer-specific item prices, invoice/receipt reads and creation, returns, statements, PDFs/thermal print data and drafts. Bootstrap returns allowed IDs to prune stale cached customer data, even when a customer moves between groups without changing the salesperson's configuration. These controls govern this API; configure User Permissions separately if the same scope must apply in ERPNext Desk and other integrations.
 
-## Administrator setup
+## Draft edit consistency
 
-A System Manager creates one Mobile Sales Settings document for each mobile user. Set User, Company, Warehouse, Price List, Settings PIN (6–12 digits), and optional target warehouse, tax template, payment mode and custom coordinate field names. Use a selling price list in company currency. PIN is a Frappe encrypted Password field. Mobile first-time self-setup is restricted to System Manager; configured users need PIN to edit their own settings. Five failed attempts lock PIN access for 15 minutes; edit authorization expires after 10 minutes and is bound to user/session. Reset PIN from Desk as administrator.
+Mobile Request now includes an abandoned flag and optional document links. prepare_pending_edit runs under the same user/request lock as original saving. It resolves saved requests or permanently retires unsaved UUIDs before altered data is allowed under a new UUID. save_document rejects retired requests, preventing delayed originals from creating duplicates.
 
-Invoice company, list, tax and warehouse are applied server-side from these settings. Receipt payment mode and transfer warehouses are defaults; authorized alternatives can be selected. Old clients retain legacy operations until their user settings are configured. The new mobile client requires configuration before starting.
+update_document uses a stable UUID/envelope and persistent ledger, requires normal Write/Create validation and docstatus=0, compares the expected modified timestamp, rebuilds supported transaction fields through ERPNext pricing/defaults, and saves the same document. It shares the submit lock. Repeated confirmed update requests return the same document without saving again. New clients submit with the reviewed modified timestamp; changed drafts require reopening before approval.
 
-The API uses normal ERPNext document and list permissions. The private idempotency ledger uses ignore_permissions after document authorization; PIN-authorized writes only modify the current user's allowlisted settings. Do not grant System Manager to salespeople. Grant Read for required master data, Bin for stock, Contact/Address for linked details, GL Entry for statements/balances, and document Create/Read/Write/Submit/Print only as needed. Configure User Permissions and company/warehouse restrictions in ERPNext.
+Draft listing is restricted to the current user's drafts and supported Sales Invoice/Return, Receive-from-Customer Payment Entry and Material Transfer Stock Entry operations. Custom fields are retained, but complex external drafts/custom workflows need site acceptance testing.
 
-## Behavior
+## Printing/barcodes/stock
 
-Invoice preview does not insert or submit documents. Prices, UOM conversion, tax and ledger validations come from ERPNext. Saving creates a draft; submission is a separate explicit step. Receipt allocations validate invoice customer, company, currency, receivable account, outstanding balance and total amount. PDF uses standard ERPNext print permissions and print settings. Stock is a Bin balance view, not a stock reconciliation document. Location reads existing Customer/Address fields; no invented coordinates. Unsupported foreign-currency receipts, serial/batch workflows and customized compliance flows require further development.
+Item catalog includes all Item Barcode rows and their UOMs. Stock reports available_qty=actual_qty-reserved_qty in stock UOM; this is a display calculation, not a reservation or a complete batch/serial availability solver.
 
-Unexpected save/submit errors return a support ID matching Error Log. The HTTP500 screenshot alone is insufficient to prove the specific live-site cause; this update fixes a known Payment Entry initialization issue and provides diagnostics. Statement aggregation uses the v16 dictionary SUM format.
+Document PDF supports Sales Invoice (including returns), Payment Entry and Stock Entry using standard print permissions/templates/settings. print_data provides current authorized data for the mobile bilingual ESC/POS layout. statement_print_data and statement_pdf require GL Entry report permission, use scoped customer/normal list permissions and v16 dict SUM aggregation, and compute running balances. Statement PDF limit: 20000 rows; mobile thermal limit:1000 rows. Narrow the period for large reports.
 
-Redis is required for locks and PIN throttling. Retain Mobile Request records for retry idempotency. HTTPS is mandatory for the Android client. Test business effects on a non-production company before rollout.
+The thermal format is separate from site HTML print formats and does not automatically import custom logos, QR/ZATCA layouts. Validate those separately before using the thermal ticket as an official tax document. Standard server PDF preserves the selected default template behavior.
+
+## Permissions and validation
+
+Grant only needed master-data read, Customer Group read, Bin read, GL Entry read/report, document create/read/write/submit/print. Contact/Address read supplies linked details. Configure default collection accounts, company-currency price lists and accounts, tax templates and UOM conversions in ERPNext. Do not grant System Manager to salespeople. Settings PIN uses encrypted Frappe Password fields, attempt throttling and session-bound short-lived edit authorization.
+
+All business documents retain ordinary ERPNext permissions and validation. Private request-ledger insert and explicitly PIN-authorized allowlisted own-user settings writes use ignore_permissions. Redis is required for locks/throttling. Retain ledger records needed for recovery. HTTPS is mandatory.
 
 ```bash
 PYTHONPATH=. python -m unittest discover -s tests -v
 ```
 
-The tests mock the Frappe boundary; they do not certify live ERPNext accounting, Redis behavior or installation. The full project includes Arabic setup and acceptance guides.
+Local tests mock the Frappe boundary. They do not establish live-site accounting, Redis concurrency, hardware printing or installation correctness. The user reported testing version0.2.0 on real hardware/site; version0.3.0 additions require the included acceptance tests. Source is MIT licensed.
