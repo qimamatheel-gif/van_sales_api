@@ -30,3 +30,10 @@ def clean_lines(rows):
             raise ValueError("الصنف ووحدة البيع مطلوبان")
         result.append({"item_code": code, "uom": uom, "qty": positive(row.get("qty"))})
     return result
+
+
+def return_quantity(qty, selected_factor, original_factor, maximum):
+    value = positive(qty) * positive(selected_factor) / positive(original_factor)
+    if not math.isfinite(value) or value > positive(maximum) + 1e-9:
+        raise ValueError("كمية المرتجع أكبر من المتبقي للإرجاع")
+    return min(value, float(maximum))

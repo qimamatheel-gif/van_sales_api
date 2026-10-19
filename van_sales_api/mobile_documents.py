@@ -31,7 +31,7 @@ def editable_payload(doc):
                  price_list=doc.get('selling_price_list'), tax_template=doc.get('taxes_and_charges'),
                  update_stock=doc.get('update_stock'), due_date=str(doc.get('due_date') or doc.posting_date))
         p['items'] = [{'item_code': r.item_code, 'item_name': r.item_name, 'qty': abs(flt(r.qty)), 'uom': r.uom} for r in doc.items]
-        p['return_items'] = [{'row_name': r.sales_invoice_item, 'qty': abs(flt(r.qty))} for r in doc.items] if doc.is_return else []
+        p['return_items'] = [{'row_name': r.sales_invoice_item, 'qty': abs(flt(r.qty)), 'uom': r.uom} for r in doc.items] if doc.is_return else []
     elif doc.doctype == 'Payment Entry':
         p.update(kind='receipt',customer=doc.party,mode_of_payment=doc.mode_of_payment,
                  amount=doc.paid_amount,reference_no=doc.reference_no,

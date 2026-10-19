@@ -62,7 +62,7 @@ def bootstrap():
     from van_sales_api.customer_scope import customer_names
     allowed = customer_names() if (config and config.get('customer_group')) or manager else []
     # Scope IDs also prune previously cached customers when membership changes.
-    return {"user": frappe.session.user, "companies": companies, "customer_scope": allowed, "api_version": 3, "csrf_token": get_csrf_token(), "posting_date": nowdate(), "settings": public_settings(), "configured": bool(get_settings()), "can_initialize": "System Manager" in frappe.get_roles()}
+    return {"user": frappe.session.user, "companies": companies, "customer_scope": allowed, "full_name": frappe.get_cached_value("User", frappe.session.user, "full_name") or frappe.session.user, "email": frappe.get_cached_value("User", frappe.session.user, "email") or frappe.session.user, "api_version": 4, "csrf_token": get_csrf_token(), "posting_date": nowdate(), "settings": public_settings(), "configured": bool(get_settings()), "can_initialize": "System Manager" in frappe.get_roles()}
 
 
 @frappe.whitelist()
@@ -192,24 +192,37 @@ def sales_return(p):
         frappe.throw(_("اختر فاتورة مبيعات معتمدة"))
     if original.company != p.get("company"):
         frappe.throw(_("الفاتورة ليست للشركة المختارة"))
+    if p.get("customer") and original.customer != p.get("customer"):
+        frappe.throw(_("الفاتورة لا تخص العميل المختار"))
     doc = make_sales_return(original.name)
     doc.check_permission("create")
     selected = p.get("return_items") or []
+    if not isinstance(selected, list) or not 1 <= len(selected) <= 200 or not all(isinstance(r, dict) for r in selected):
+        frappe.throw(_("قائمة أصناف المرتجع غير صالحة"))
     amounts = {}
     for row in selected:
         key = row.get("row_name")
         if key in amounts:
             frappe.throw(_("سطر مرتجع مكرر"))
-        amounts[key] = positive(row.get("qty"))
+        amounts[key] = row
     if not amounts:
         frappe.throw(_("حدد كمية واحدة على الأقل للإرجاع"))
     keep = []
     for row in doc.items:
         source = row.sales_invoice_item
         if source in amounts:
-            if amounts[source] > abs(flt(row.qty)):
-                frappe.throw(_("كمية المرتجع أكبر من الكمية الأصلية"))
-            row.qty = -amounts.pop(source)
+            chosen = amounts.pop(source)
+            item = read_doc("Item", row.item_code)
+            units = {u.uom: flt(u.conversion_factor) for u in item.uoms}
+            units.setdefault(item.stock_uom, 1)
+            # Keep original invoice UOM/rate, convert entered UOM to its exact equivalent.
+            # ERPNext also validates previous returns using stock_qty.
+            from van_sales_api.validation import return_quantity
+            try:
+                qty = return_quantity(chosen.get("qty"), row.conversion_factor if not chosen.get("uom") or chosen.get("uom") == row.uom else units.get(chosen.get("uom")), row.conversion_factor, abs(flt(row.qty)))
+            except (ValueError, TypeError) as exc:
+                frappe.throw(str(exc))
+            row.qty = -qty
             keep.append(row)
     if amounts:
         frappe.throw(_("سطر المرتجع غير موجود في الفاتورة"))
@@ -404,13 +417,23 @@ def invoices(company, customer=None, start=0):
         filters, start)
 
 
+def invoice_unit_rows(row):
+    units = item_unit_rows(read_doc("Item", row.item_code))
+    # Historical invoice factor remains authoritative if the Item master changes.
+    units = [u for u in units if u["uom"] != row.uom]
+    units.insert(0, {"uom": row.uom, "conversion_factor": row.conversion_factor})
+    return units
+
+
 @frappe.whitelist()
 def invoice_details(name):
     auth()
     doc = read_doc("Sales Invoice", name)
     return {"name": doc.name, "customer": doc.customer,
         "items": [{"row_name": r.name, "item_code": r.item_code,
-            "item_name": r.item_name, "qty": r.qty, "uom": r.uom} for r in doc.items]}
+            "item_name": r.item_name, "qty": r.qty, "uom": r.uom,
+            "conversion_factor": r.conversion_factor, "rate": r.rate,
+            "units": invoice_unit_rows(r)} for r in doc.items]}
 
 
 @frappe.whitelist()
@@ -565,25 +588,43 @@ def stock(company, warehouse=None, start=0):
         frappe.throw(_("المستودع غير صالح"))
     rows = visible("Bin", ["name", "item_code", "actual_qty", "reserved_qty", "projected_qty", "stock_uom"], {"warehouse": warehouse}, start)
     for row in rows:
+        item = read_doc("Item", row.item_code)
+        row["item_name"] = item.item_name
+        row["barcodes"] = [{"barcode": b.barcode, "uom": b.uom} for b in item.barcodes]
         row["available_qty"] = flt(row.actual_qty) - flt(row.reserved_qty)
+        row["units"] = [dict(u, actual_qty=flt(row.actual_qty)/u["conversion_factor"],
+            available_qty=row["available_qty"]/u["conversion_factor"], reserved_qty=flt(row.reserved_qty)/u["conversion_factor"]) for u in item_unit_rows(item)]
     return {"rows": rows, "warehouse": warehouse, "next_start": int(start) + 200 if len(rows) == 200 else None}
+
+
+def item_unit_rows(item):
+    units = [{"uom": u.uom, "conversion_factor": flt(u.conversion_factor)} for u in item.uoms if flt(u.conversion_factor) > 0]
+    if not any(u["uom"] == item.stock_uom for u in units):
+        units.append({"uom": item.stock_uom, "conversion_factor": 1})
+    return units
 
 
 @frappe.whitelist(methods=["POST"])
 def item_prices(customer, items):
     auth()
+    read_doc("Customer", customer)
     codes = parse(items)
     if not isinstance(codes, list) or len(codes) > 20:
         frappe.throw(_("طلب الأسعار يدعم 20 صنفًا في الصفحة"))
     result = []
-    for code in codes:
+    # One ERPNext quote per UOM avoids duplicate-line quantity pricing distortions.
+    for code in dict.fromkeys(codes):
         item = read_doc("Item", code)
-        try:
-            doc = invoice({"customer": customer, "items": [{"item_code": code, "uom": item.stock_uom, "qty": 1}]})
-            result.append({"item_code": code, "uom": item.stock_uom, "before_tax": doc.net_total,
-                "after_tax": doc.grand_total, "tax": doc.total_taxes_and_charges, "currency": doc.currency})
-        except frappe.ValidationError as exc:
-            result.append({"item_code": code, "error": str(exc)})
+        quotes = []
+        for unit in item_unit_rows(item):
+            try:
+                doc = invoice({"customer": customer, "items": [{"item_code": code, "uom": unit["uom"], "qty": 1}]})
+                quotes.append(dict(unit, before_tax=doc.net_total, after_tax=doc.grand_total,
+                    tax=doc.total_taxes_and_charges, currency=doc.currency))
+            except frappe.ValidationError as exc:
+                quotes.append(dict(unit, error=str(exc)))
+        default = next((q for q in quotes if q["uom"] == item.stock_uom), {})
+        result.append(dict(default, item_code=code, units=quotes))
     return result
 
 
@@ -601,3 +642,4 @@ def document_pdf(doctype, name):
     frappe.local.response.type = "pdf"
 
 from van_sales_api.mobile_documents import (get_document, drafts, prepare_pending_edit, update_document, print_data, statement_print_data, statement_pdf)
+from van_sales_api.mobile_reports import document_history, stock_print_data, stock_pdf
